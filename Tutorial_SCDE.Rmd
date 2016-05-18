@@ -1,0 +1,60 @@
+---
+title: "SCDE Pagoda Tutorial"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("scde")
+library("psych")
+```
+***
+
+## Single Cell Differential Expression Analysis
+  
+Using single cell RNA-seq data with the `scde` package. Link to the package: <http://hms-dbmi.github.io/scde/index.html>
+
+>The scde package implements routines for fitting individual error models for single-cell RNA-seq measurements. Briefly, the read counts observed for each gene are modeled using a mixture of a negative binomial (NB) distribution (for the amplified/detected transcripts) and low-level Poisson distribution (for the unobserved or background-level signal of genes that failed to amplify or were not detected for other reasons). These models can then be used to identify robustly differentially expressed genes between groups of cells. For more information, please refer to the original manuscript by Kharchenko et al..
+  
+## Reading Data 
+Read counts and normalized values were acquired from Zuguang as a RData file containing two large R objects:
+```{r Data Summary}
+load("~/RNA_Seq/For_Simon/cnag_count_all_experiments.RData")
+ls()
+head(summary(count_list))
+head(summary(count_list$MCF10CA_3D_5d_random[,1:3]))
+```
+
+### Samples included in the dataset:
+The included samples are: 
+```{r list_Samples, echo = FALSE}
+rownames(head(summary(count_list)))
+sample <- "MCF10CA_3D_5d_random"
+```
+
+For further analysis we will be using the sample = ``r sample`` sample.
+
+#### Raw count data: `count_list`
+By calling `count_list$MCF10CA_2D_random[1:5,1:4]` you can see the first data entries / raw counts for the genes with the ensembl-IDs: *`r row.names(count_list$MCF10CA_2D_random[1:5,1:4])`* (as shown in the line header).
+```{r echo=FALSE}
+count_list$MCF10CA_2D_random[1:5,1:4]
+```
+  
+The raw count data contains numbers of counts for each gene as described by the ENSG_id number.
+> ToDo: Find out what the ".4" or the ".2" at the end of the ensembl-ID means in the dataset.  
+  
+#### Normalized Values: `deseq2_list`
+By calling `deseq2_list$MCF10CA_2D_random[1:5,1:4]` you can see the first data entries / normalized values for the genes with the ensembl-IDs: *`r row.names(deseq2_list$MCF10CA_2D_random[1:5,1:4])`* (as shown in the line header).
+```{r echo=FALSE}
+deseq2_list$MCF10CA_2D_random[1:5,1:4]
+```
+  
+These values are already normalized by Zuguang, probably by a "standard procedure" of the deseq2 protocol.
+> ToDo: Find out what normalization was used and how the data is structured
+  
+
+## Preparing Data
+  
+Analysis starts with read counts as in `count_list` of the 
+
+
