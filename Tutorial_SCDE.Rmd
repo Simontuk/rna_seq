@@ -2,15 +2,21 @@
 title: "SCDE Pagoda Tutorial"
 output: html_document
 ---
-
+  
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library("scde")
 library("psych")
+library("biomaRt")
+library("knitr")
+library("GSEABase")
+library("RColorBrewer")
+library("gplots")
+
 ```
 ***
 
-## Single Cell Differential Expression Analysis
+## Single Cell RNAseq - Expression Analysis
   
 Using single cell RNA-seq data with the `scde` package. Link to the package: <http://hms-dbmi.github.io/scde/index.html>
 
@@ -22,39 +28,414 @@ Read counts and normalized values were acquired from Zuguang as a RData file con
 load("~/RNA_Seq/For_Simon/cnag_count_all_experiments.RData")
 ls()
 head(summary(count_list))
-head(summary(count_list$MCF10CA_3D_5d_random[,1:3]))
+kable(head(summary(count_list$MCF10CA_3D_5d_random[,1:3])))
+
 ```
 
 ### Samples included in the dataset:
 The included samples are: 
 ```{r list_Samples, echo = FALSE}
 rownames(head(summary(count_list)))
-sample <- "MCF10CA_3D_5d_random"
+MCFsample <- "MCF10CA_3D_5d_random"
+
 ```
 
-For further analysis we will be using the sample = ``r sample`` sample.
+For further analysis we will be using the sample = ``r MCFsample`` sample.
 
 #### Raw count data: `count_list`
 By calling `count_list$MCF10CA_2D_random[1:5,1:4]` you can see the first data entries / raw counts for the genes with the ensembl-IDs: *`r row.names(count_list$MCF10CA_2D_random[1:5,1:4])`* (as shown in the line header).
-```{r echo=FALSE}
-count_list$MCF10CA_2D_random[1:5,1:4]
+```{r Output Table Countlist, echo=FALSE}
+kable(count_list$MCF10CA_2D_random[1:5,1:4])
+
 ```
   
-The raw count data contains numbers of counts for each gene as described by the ENSG_id number.
+The raw count data contains numbers of counts for each gene as described by the ENSG_id number. 
+
 > ToDo: Find out what the ".4" or the ".2" at the end of the ensembl-ID means in the dataset.  
   
 #### Normalized Values: `deseq2_list`
 By calling `deseq2_list$MCF10CA_2D_random[1:5,1:4]` you can see the first data entries / normalized values for the genes with the ensembl-IDs: *`r row.names(deseq2_list$MCF10CA_2D_random[1:5,1:4])`* (as shown in the line header).
-```{r echo=FALSE}
-deseq2_list$MCF10CA_2D_random[1:5,1:4]
+```{r Output Table NomrVal, echo=FALSE}
+kable(deseq2_list$MCF10CA_2D_random[1:5,1:4])
+
 ```
   
 These values are already normalized by Zuguang, probably by a "standard procedure" of the deseq2 protocol.
+
 > ToDo: Find out what normalization was used and how the data is structured
   
 
 ## Preparing Data
   
-Analysis starts with read counts as in `count_list` of the 
+Analysis starts with read counts as in `count_list` of the sample ``r MCFsample``  
+Here we see the cell/experiment names for the `r MCFsample` dataset:
+ 
+```{r Data preparation}
+MCF_rawcounts <- count_list[[MCFsample]]
+colnames(MCF_rawcounts)
 
+```
+
+### `scde` Preprocessing raw count data with `clean.counts`
+
+```{r CleanCounts}
+ccounts <- clean.counts(MCF_rawcounts, min.lib.size = 1000, min.reads = 1, min.detected = 1)
+dim(MCF_rawcounts)
+dim(ccounts)
+rownames(ccounts) <- gsub("\\.\\d+", "\\1", rownames(ccounts)) # Removing Ensembl_ID decimal (xxx.4)
+ccounts <- ccounts[,1:69] # Removing the "Bulk Experiment"
+
+```
+  
+## Differential Expression Analysis  
+  
+After cleaning the count data with different filters (`min.lib.size = 1000, min.reads = 1, min.detected = 1`) the resulting number of genes with counts reduces from **`r nrow(MCF_rawcounts)`** by `r nrow(MCF_rawcounts)-nrow(ccounts)` to **`r nrow(ccounts)`** genes
+
+## Fitting error models with the `scde.error.models` function
+In this step we will fit the error models on which all subsequent calculations will rely. The fitting process relies on a subset of robust genes that are detected in multiples cross-cell comparisons.
+We supply no "grouping" for the error models, because we are only analyzing one cell type (`r MCFsample`) 
+
+```{r Fitting Error Model, eval = FALSE}
+o.ifm <- scde.error.models(counts = ccounts, groups = NULL, n.cores = 8, threshold.segmentation = TRUE, save.crossfit.plots = FALSE, save.model.plots = FALSE, verbose = 1)
+save(o.ifm, file=("~/RNA_Seq/For_Simon/errormodelfit.rdata"))
+
+```
+
+```{r Load Error Mode}
+load(file=("~/RNA_Seq/For_Simon/errormodelfit.rdata"))
+
+```
+
+
+### Filter out cells
+Filtering cells that don't show positive correlation with the expected expression magnitudes (poor fits)
+```{r Filtering cells}
+valid.cells <- o.ifm$corr.a > 0
+table(valid.cells)
+
+o.ifm <- o.ifm[valid.cells, ]
+
+```
+
+### Define an expression magnitude prior for the genes  
+main function: defining a grid of expression values on which the numerical calculations will be carried out
+
+```{r Estimate gene expression, eval=FALSE,echo=FALSE}
+o.prior <- scde.expression.prior(models = o.ifm, counts = ccounts, length.out = 400, show.plot = FALSE)
+
+```
+
+## Testing for differential expression
+No defining of two groups, only differential expression in the one groupe of cells. 
+__Could be expanded later.__
+```{r DiffExp Testing, eval=FALSE,echo=FALSE}
+ediff <- scde.expression.difference(o.ifm, ccounts, o.prior, n.randomizations = 100, n.cores = 8, verbose = 1)
+
+```
+  
+
+***
+***
+  
+# Pathway and Gene Set Overdispersion Analysis  
+  
+Use of the `pagoda` routines/functions in the scde package. It helps identifying known pathways or novel gene sets that show significant excess of coordinated variability among the measured cells.
+`pagoda` can be used to effectively recover known subpopulations and discover putative new subpopulations and their corresponding functional characteristics in single-cell samples. For more information, please refer to the original manuscript by Fan et al..
+  
+__Preprocessing was conducted as in the differential expression analysis above__
+
+## Calculating k-nearest neighbor error model
+Calculating via function `knn.error.models()`
+
+```{r KnearestNeighbor Error Models, eval = FALSE}
+# not calculated due to high complexity, but sample plots are included
+ko.ifm <- knn.error.models(counts = ccounts, k = ncol(ccounts)/4, n.cores = 7, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 10)
+
+```
+__Resulting Plots for cell with identifier:__ _DKFZ_03_1_C01_
+
+![](/Users/simonsteiger/RNA_Seq/RNA-Seq-Project/CellModelFits_Ex1.png)
+  
+|   Plot 1     |   Plot  2     |     Plot 3    |     Plot 4   |
+|-----------------|-----------------|-----------------|-----------------|
+| The two scatter plots on the left show __observed (in a given cell) vs. expected (from k similar cells) expression magnitudes__ for each gene that is being used for model fitting. | The second (from the left) scatter plot shows genes belonging to the drop-out component in red. The black dashed lines show 95% confidence band for the amplified genes (the grey dashed lines show confidence band for an alternative constant-theta model). | The third plot shows drop-out probability as a function of magnitude | The fourth plot shows negative binomial theta local regression fit as a function of magnitude (for the amplified component). |  
+
+Table: Plot description for _Knn-Error-Modeling_ Plots  
+
+--------------------------------------------------------------------
+  
+## Normalizing variance
+  
+In order to accurately quantify excess variance or overdispersion, we must normalize out expected levels of technical and intrinsic biological noise. Briefly, variance of the NB/Poisson mixture processes derived from the error modeling step are modeled as a chi-squared distribution using adjusted degrees of freedom and observation weights based on the drop-out probability of a given gene. Here, we normalize variance, trimming 3 most extreme cells and limiting maximum adjusted variance to 5.
+  
+```{r Normalize Variance, eval = FALSE}
+# not calculated due to high complexity, resulting plot is included
+varinfo <- pagoda.varnorm(ko.ifm, counts = ccounts, trim = 3/ncol(ccounts), max.adj.var = 5, n.cores = 8, plot = TRUE)
+save(list = c("ko.ifm","varinfo"), file=("~/RNA_Seq/For_Simon/KNNerrormodelfit.rdata"))
+
+```
+```{r Load_Var/knn_Data, echo=FALSE}
+load(file=("~/RNA_Seq/For_Simon/KNNerrormodelfit.rdata"))
+```
+__Resulting Plots:__  
+![](/Users/simonsteiger/RNA_Seq/RNA-Seq-Project/Varinfo_Plot1.png)
+  
+| Plot 1 | Plot 2 |
+|------------------------------------|------------------------------------|
+|The plot on the left shows coefficient of variance squared (on log10 scale) as a function of expression magnitude (log10 FPM). The red line shows local regression model for the genome-wide average dependency. |The plot on the right shows adjusted variance (derived based on chi-squared probability of observed/genomewide expected ratio for each gene, with degrees of freedom adjusted for each gene). The adjusted variance of 1 means that a given gene exhibits as much variance as expected for a gene of such population average expression magnitude.|
+
+_Genes with high adjusted variance are overdispersed within the measured population and most likely show subpopulation-specific expression:_
+
+```{r top overdispersed genes}
+# list top overdispersed genes
+sort(varinfo$arv, decreasing = TRUE)[1:10]
+
+```
+
+### Controlling for sequencing depth:
+
+__as described in the tutorial__  
+```{r Controlling for sequencing depth}
+varinfo <- pagoda.subtract.aspect(varinfo, colSums(ccounts[, rownames(ko.ifm)]>0))
+
+```
+
+
+## Evaluate overdispersion of pre-defined gene sets
+
+In order to detect significant aspects of heterogeneity across the population of single cells, 'pagoda' identifies pathways and gene sets that exhibit statistically significant excess of coordinated variability. Specifically, for each gene set, we tested whether the amount of variance explained by the first principal component significantly exceed the background expectation. We can test both pre-defined gene sets as well as 'de novo' gene sets whose expression profiles are well-correlated within the given dataset.
+
+For pre-defined gene sets, we'll use GO annotations. For the purposes of this vignette, in order to make calculations faster, we will only consider the first 100 GO terms plus a few that we care about. Additional tutorials on how to create and use your own gene sets can be found in a separate tutorial.
+
+```{r Package org.Hs.eg.db, include=FALSE}
+library(org.Hs.eg.db)
+```
+```{r Creating go-term environment}
+# translate gene names to EG_ids
+ids <- unlist(lapply(mget(rownames(ccounts), org.Hs.egENSEMBL2EG, ifnotfound = NA), function(x) x[1]))
+rids <- names(ids); names(rids) <- ids
+
+# convert GO lists from ids to gene names
+gos.interest <- unique(c(ls(org.Hs.egGO2ALLEGS)[1:100],"GO:0022008","GO:0048699", "GO:0000280", "GO:0007067"))
+
+go.env <- lapply(mget(gos.interest, org.Hs.egGO2ALLEGS), function(x) as.character(na.omit(rids[x])))
+
+```
+
+## Other gene sets
+
+```{r Other Gene Sets, eval=FALSE}
+# Read in a list of gene sets
+genesetsNames <- read.csv("~/RNA_Seq/RNA-Seq-Project/Testgenesets.csv",header = FALSE,sep = ",")
+genuri <- asBroadUri(genesetsNames) # Convert to URI
+
+genesetsofinterest <- getBroadSets(genuri) # Download gene sets
+
+# Create an Environment with the Gene sets and included genes
+gois <- sapply(names(genesetsofinterest), function(x) geneIds(genesetsofinterest[[x]]), USE.NAMES = TRUE)
+
+go.env <- clean.gos(gois) # remove GOs with too few or too many genes
+go.env <- list2env(go.env) # convert to an environment
+
+
+#Change rownames to Gene-Symbols
+ids <- unlist(lapply(mget(rownames(ccounts), org.Hs.egENSEMBL2EG, ifnotfound = NA), function(x) x[1]))
+
+id1 <- na.omit(ids)
+
+symbs <- unlist(lapply(mget(id1, org.Hs.egSYMBOL, ifnotfound = NA), function(x) x[1]))
+
+rids <- symbs; names(rids) <- names(id1)
+nasymbs <- unlist(lapply(rownames(ccounts), function(x) rids[x])) # Switching EnsemblID to GeneSymbol
+
+ccountstest <- ccounts 
+rownames(ccountstest) <- nasymbs
+
+ccountstest <- ccountstest[!is.na(rownames(ccountstest)),]
+
+
+# Error Model for new Element with gene symbols
+
+ko.ifm <- knn.error.models(counts = ccountstest, k = ncol(ccountstest)/4, n.cores = 8, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 10)
+
+# Normalization
+
+varinfo <- pagoda.varnorm(ko.ifm, counts = ccountstest, trim = 3/ncol(ccountstest), max.adj.var = 5, n.cores = 8, plot = TRUE)
+
+# Controlling for sequencing depth
+varinfo <- pagoda.subtract.aspect(varinfo, colSums(ccountstest[, rownames(ko.ifm)]>0))
+
+# First principal component analysis
+
+pwpca <- pagoda.pathway.wPCA(varinfo, go.env, n.components = 1, n.cores = 8)
+
+
+
+```
+
+
+```{r Testing, eval=FALSE}
+hall_e_m <- getBroadSets(uri = asBroadUri(c("HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION")))
+
+GeneSet(hall_e_m,geneIdType=EntrezIdentifier("org.Hs.eg.db"),setName="Sample")
+hall_e_m <- mapIdentifiers(hall_e_m, EntrezIdentifier())
+
+
+
+gidsHall <- geneIds(hall_e_m)
+
+gidsHall <- gidsHall$HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION
+
+Hall_list <- getBM(filters= "hgnc_symbol", attributes= c("hgnc_symbol","ensembl_gene_id", "entrezgene"),values=gidsHall, mart=mart)
+
+
+showMethods("GeneSetCollection")
+
+geneIds(hall_e_m)
+
+
+gos.interest.a <- c("GO:0007067","GO:0007049")
+
+
+
+
+go.env.a <- lapply(mget(gos.interest.a, org.Hs.egGO2ALLEGS), function(x) as.character(na.omit(rids[x])))
+
+go.env <- go.env.a
+
+go.env <- NA
+go.env$'Hallmark_Mes_Ench' <- Hall_list$ensembl_gene_id
+```
+
+
+### Output / Results included in `go.env`  
+
+The first 10 elements in `gos.interest` are: `r head(gos.interest)`     
+  
+`r gos.interest[1]` first 5 Gene ids results are: `r go.env[[1]][1:5]`   
+  
+`r gos.interest[2]` first 5 Gene ids results are: `r go.env[[2]][1:5]`   
+
+***
+  
+
+```{r env clean up}
+# clean up and conversion to environment:
+go.env <- clean.gos(go.env) # remove GOs with too few or too many genes
+go.env <- list2env(go.env) # convert to an environment
+
+```
+
+## First principal component magnitudes for each GO gene set
+
+Now, we can calculate weighted first principal component magnitudes for each GO gene set in the provided environment.
+
+```{r Weighted first PCA for each GO gene set}
+pwpca <- pagoda.pathway.wPCA(varinfo, go.env, n.components = 1, n.cores = 8)
+
+```
+  
+### Statistical Significance
+We can now evaluate the statistical significance of the observed overdispersion for each GO gene set.
+
+```{r Statistical significance}
+df <- pagoda.top.aspects(pwpca, return.table = TRUE, plot = TRUE, z.score = 1.96)
+
+```
+  
+Each point on the plot shows the PC1 variance (lambda1) magnitude (normalized by set size) as a function of set size. The red lines show expected (solid) and 95% upper bound (dashed) magnitudes based on the Tracey-Widom model.
+
+```{r Table Overdispersed gene sets}
+kable(head(df))
+
+```
+
+* The z column gives the Z-score of pathway over-dispersion relative to the genome-wide model (Z-score of 1.96 corresponds to P-value of 5%, etc.).
+* "z.adj" column shows the Z-score adjusted for multiple hypothesis (using Benjamini-Hochberg correction).
+* "score" gives observed/expected variance ratio
+* "sh.z" and "adj.sh.z" columns give the raw and adjusted Z-scores of "pathway cohesion", which compares the observed PC1 magnitude to the magnitudes obtained when the observations for each gene are randomized with respect to cells. When such Z-score is high (e.g. for GO:0000070) then multiple genes within the pathway contribute to the coordinated pattern.
+
+
+## Evaluate overdispersion of 'de novo' gene sets
+
+We can also test 'de novo' gene sets whose expression profiles are well-correlated within the given dataset. The following procedure will determine 'de novo' gene clusters in the data, and build a background model for the expectation of the gene cluster weighted principal component magnitudes. Note the higher trim values for the clusters, as we want to avoid clusters that are formed by outlier cells.
+
+```{r Calculate gene clusters, eval=FALSE}
+# This does not work on local machine
+clpca <- pagoda.gene.clusters(varinfo, trim = 7.1/ncol(varinfo$mat), n.clusters = 2, n.cores = 4, plot = TRUE)
+
+
+```
+
+```{r Quick Webinterface}
+tam <- pagoda.top.aspects(pwpca, n.cells = NULL, z.score = qnorm(0.01/2, lower.tail = FALSE))
+
+hc <- pagoda.cluster.cells(tam, varinfo)
+
+tamr <- pagoda.reduce.loading.redundancy(tam, pwpca)
+
+tamr2 <- pagoda.reduce.redundancy(tamr, distance.threshold = 0.9, plot = TRUE, cell.clustering = hc, labRow = NA, labCol = NA, box = TRUE, margins = c(0.5, 0.5), trim = 0)
+
+
+col.cols <- rbind(groups = cutree(hc, 3), group2 = cutree(hc,7))
+pagoda.view.aspects(tamr2, cell.clustering = hc, box = TRUE, labCol = NA, margins = c(0.5, 20))
+
+
+rownames(tam$xv) <- unlist(lapply(strsplit(rownames(tam$xv),split = "E_"),function(x) x[2]))
+hmcol<-brewer.pal(11,"RdBu")
+heatmap.2(tam$xv, trace = "none", col = hmcol,colCol =brewer.pal(5,name = "Set1")[cutree(hc,5)])
+
+
+# compile a browsable app, showing top three clusters with the top color bar
+app <- make.pagoda.app(tamr2, tam, varinfo, go.env, pwpca, col.cols = col.cols, cell.clustering = hc, title = "NPCs")
+
+save(app, file=("~/RNA_Seq/For_Simon/app.rdata"))
+
+## Use in R in terminal:
+library("scde")
+load(file=("~/RNA_Seq/For_Simon/app.rdata"))
+# show app in the browser (port 1468)
+show.app(app, "pollen", browse = TRUE, port = 1468) 
+
+
+```
+
+
+
+```{r Scrapyard, eval=FALSE}
+## Playground:
+mart<- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+
+genes<-c("ENSG00000000003.10","ENSG00000000005.5","ENSG00000000419.8","ENSG00000000457.8","ENSG00000000460.11")
+
+
+genes <- gsub("\\.\\d+", "\\1", genes)
+genes
+
+library(org.Hs.eg.db)
+
+ids <- unlist(lapply(mget(rownames(ccounts), org.Hs.egALIAS2EG, ifnotfound = NA), function(x) x[1]))
+rids <- names(ids); names(rids) <- ids
+
+
+getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", "entrezgene","go_id"),values=genes,mart= mart)
+
+## Reducing the number of evaluated cells to test `pagoda.gene.clusters` function
+dim(ccounts)
+ccounts1 <- ccounts[,1:20]
+
+ko.ifm1 <- knn.error.models(counts = ccounts1, k = ncol(ccounts)/4, n.cores = 8, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 10,save.model.plots = FALSE)
+
+varinfo1 <- pagoda.varnorm(ko.ifm1, counts = ccounts1, trim = 3/ncol(ccounts), max.adj.var = 5, n.cores = 8, plot = TRUE)
+
+varinfo1 <- pagoda.subtract.aspect(varinfo1, colSums(ccounts1[, rownames(ko.ifm1)]>0))
+
+clpca1 <- pagoda.gene.clusters(varinfo1, trim = 7.1/ncol(varinfo1$mat), n.clusters = 10, n.cores = 8, plot = TRUE)
+
+
+
+
+
+
+```
 
