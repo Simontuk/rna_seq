@@ -274,6 +274,8 @@ pwpca <- pagoda.pathway.wPCA(varinfo, go.env, n.components = 1, n.cores = 8)
 ```
 
 
+
+
 ```{r Testing, eval=FALSE}
 hall_e_m <- getBroadSets(uri = asBroadUri(c("HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION")))
 
@@ -391,12 +393,12 @@ app <- make.pagoda.app(tamr2, tam, varinfo, go.env, pwpca, col.cols = col.cols, 
 
 save(app, file=("~/RNA_Seq/For_Simon/app.rdata"))
 
-## Use in R in terminal:
-library("scde")
-load(file=("~/RNA_Seq/For_Simon/app.rdata"))
-# show app in the browser (port 1468)
-show.app(app, "pollen", browse = TRUE, port = 1468) 
+```
 
+```{r,prompt=TRUE}
+system("Rscript OpenWebApp.R")
+## Use in R in terminal:
+# show app in the browser (port 1468)
 
 ```
 
@@ -436,6 +438,138 @@ clpca1 <- pagoda.gene.clusters(varinfo1, trim = 7.1/ncol(varinfo1$mat), n.cluste
 
 
 
+
+```
+
+```{r Reduced Gene Set, eval=FALSE}
+#Change rownames to Gene-Symbols
+ids <- unlist(lapply(mget(rownames(ccounts), org.Hs.egENSEMBL2EG, ifnotfound = NA), function(x) x[1]))
+
+id1 <- na.omit(ids)
+
+symbs <- unlist(lapply(mget(id1, org.Hs.egSYMBOL, ifnotfound = NA), function(x) x[1]))
+
+rids <- symbs; names(rids) <- names(id1)
+nasymbs <- unlist(lapply(rownames(ccounts), function(x) rids[x])) # Switching EnsemblID to GeneSymbol
+
+ccountstest <- ccounts 
+rownames(ccountstest) <- nasymbs
+
+ccountstest <- ccountstest[!is.na(rownames(ccountstest)),]
+
+
+# Error Model for new Element with gene symbols
+
+ko.ifm <- knn.error.models(counts = ccountstest, k = ncol(ccountstest)/4, n.cores = 8, min.count.threshold = 2, min.nonfailed = 5, max.model.plots = 10)
+
+# Normalization
+
+varinfo <- pagoda.varnorm(ko.ifm, counts = ccountstest, trim = 3/ncol(ccountstest), max.adj.var = 5, n.cores = 8, plot = TRUE)
+
+# Controlling for sequencing depth
+varinfo <- pagoda.subtract.aspect(varinfo, colSums(ccountstest[, rownames(ko.ifm)]>0))
+
+
+# Read in a list of gene sets
+#genesetsNames <- read.csv("~/RNA_Seq/RNA-Seq-Project/Testgenesets.csv",header = FALSE,sep = ",")
+#genuri <- asBroadUri(genesetsNames) # Convert to URI
+
+#genesetsofinterest <- getBroadSets(genuri) # Download gene sets
+
+# Create an Environment with the Gene sets and included genes
+#gois <- sapply(names(genesetsofinterest), function(x) geneIds(genesetsofinterest[[x]]), USE.NAMES = TRUE)
+
+cyclebase.peaktime <- read.csv("../CycleBase_files/human_periodic.tsv",sep = "\t")
+
+Periodic_Cyclebase <- cyclebase.peaktime$gene
+
+Periodic_Cyclebase <- getBM(filters= "ensembl_peptide_id", attributes= c("ensembl_gene_id", "entrezgene","hgnc_symbol","ensembl_peptide_id"),values=Periodic_Cyclebase,mart= mart)
+cyclebase.peaktime <- cyclebase.peaktime[cyclebase.peaktime$gene %in% Periodic_Cyclebase$ensembl_peptide_id,]
+
+Periodic_Cyclebase <- Periodic_Cyclebase[!duplicated(Periodic_Cyclebase$ensembl_peptide_id,),]
+cyclebase.peaktime$gensymb <- Periodic_Cyclebase$hgnc_symbol
+
+gois <- NULL
+gois$cyclebase <- Periodic_Cyclebase$hgnc_symbol
+###################
+# Read Whitfield Genesets:
+genesetsNames <- read.csv("~/RNA_Seq/RNA-Seq-Project/Testgenesets.csv",header = FALSE,sep = ",")
+genuri <- asBroadUri(genesetsNames) # Convert to URI
+
+genesetsofinterest <- getBroadSets(genuri) # Download gene sets
+
+# Create an Environment with the Gene sets and included genes
+gois_wf <- sapply(names(genesetsofinterest), function(x) geneIds(genesetsofinterest[[x]]), USE.NAMES = TRUE)
+
+gois_wf[["G1&S"]] <- c(gois_wf$WHITFIELD_CELL_CYCLE_G1_S,gois_wf$WHITFIELD_CELL_CYCLE_S)
+gois_wf[["G2&M"]] <- c(gois_wf$WHITFIELD_CELL_CYCLE_G2,gois_wf$WHITFIELD_CELL_CYCLE_G2_M)
+gois_wf[["M_G1"]] <- gois_wf$WHITFIELD_CELL_CYCLE_M_G1
+###################
+
+gois[["G1&S"]] <- gois_wf[["G1&S"]]
+gois[["G2&M"]] <- gois_wf[["G2&M"]]
+gois[["M_G1"]] <- gois_wf[["M_G1"]]
+
+go.env <- clean.gos(gois) # remove GOs with too few or too many genes
+go.env <- list2env(go.env) # convert to an environment
+
+
+
+# First principal component analysis
+
+pwpca <- pagoda.pathway.wPCA(varinfo, go.env, n.components = 1, n.cores = 8)
+
+
+tam <- pagoda.top.aspects(pwpca, n.cells = NULL, z.score = qnorm(0.01/2, lower.tail = FALSE))
+
+hc <- pagoda.cluster.cells(tam, varinfo)
+
+tamr <- pagoda.reduce.loading.redundancy(tam, pwpca,plot = TRUE)
+
+tamr2 <- pagoda.reduce.redundancy(tam, distance.threshold = 0.9, plot = TRUE, cell.clustering = hc, labRow = rownames(tam$xv), labCol = NA, box = TRUE, margins = c(0.5, 0.5), trim = 0.2)
+
+
+col.cols <- rbind(groups = cutree(hc, 3), group2 = cutree(hc,7))
+pagoda.view.aspects(tamr2, cell.clustering = hc, box = TRUE, labCol = NA, margins = c(0.5, 20))
+
+
+rownames(tam$xv)
+
+rownames(tam$xv) <- unlist(lapply(strsplit(rownames(tam$xv),split = " "),function(x) x[2]))
+hmcol<-brewer.pal(11,"RdBu")
+heatmap.2(tam$xv, trace = "none", col = hmcol,colCol =brewer.pal(5,name = "Set1")[cutree(hc,5)])
+
+```
+
+```{r}
+
+cyclebase.peaktime <- cyclebase.peaktime[cyclebase.peaktime$gene %in% Periodic_Cyclebase$ensembl_peptide_id,]
+
+gois$cyclebase <- Periodic_Cyclebase$hgnc_symbol
+
+hmcol<-brewer.pal(11,"RdBu")
+
+#Gene / Cell clustering for cyclebase geneset
+i <- 4 # N of bins for Peaktime
+countscycle <- (varinfo$mat[rownames(varinfo$mat) %in% gois$cyclebase,])
+sidecol <- brewer.pal(i,"Greens")
+countsycle.peaktime <- cyclebase.peaktime[cyclebase.peaktime$gensymb %in% rownames(countscycle),]
+cutted <- cut(countsycle.peaktime$peaktime,i)
+heatmap.2(countscycle, trace = "none", col = hmcol, RowSideColors = sidecol[cutted[-1]],revC = TRUE)
+
+countscycle <- (varinfo$mat[rownames(varinfo$mat) %in% gois$`G1&S`,])
+heatmap.2(countscycle, trace = "none", col = hmcol,key.title = "G1&S",colCol =brewer.pal(5,name = "Set1")[cutree(hc,3)])
+
+countscycle <- (varinfo$mat[rownames(varinfo$mat) %in% gois$`G2&M`,])
+heatmap.2(countscycle, trace = "none", col = hmcol,key.title = "G2&M", colCol =brewer.pal(5,name = "Set1")[cutree(hc,3)])
+
+countscycle <- (varinfo$mat[rownames(varinfo$mat) %in% gois$M_G1,])
+heatmap.2(countscycle, trace = "none", col = hmcol,key.title = "M_G1", colCol =brewer.pal(5,name = "Set1")[cutree(hc,3)])
+
+countscycle <- (varinfo$mat[rownames(varinfo$mat) %in% gois_wf$WHITFIELD_CELL_CYCLE_LITERATURE,])
+heatmap.2(countscycle, trace = "none", col = hmcol,colCol =brewer.pal(5,name = "Set1")[cutree(hc,3)])
+
+colnames(varinfo$mat)
 
 ```
 
